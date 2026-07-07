@@ -1,0 +1,103 @@
+{
+  "checkpoint_date": "2026-07-06",
+  "schema_version": "v1.3",
+  "features_count": 26,
+
+  "model": {
+    "backend": "vertex_gemma",
+    "model_id": "google/gemma-4-26b-a4b-it-maas",
+    "provider": "Google Vertex AI (MaaS)"
+  },
+
+  "hyperparameters": {
+    "MAX_DIFF_CHARS": 40000,
+    "MAX_CARD_CHARS": 30000,
+    "MAX_OUTPUT_TOKENS": 14000,
+    "GEMINI_RETRIES": 3,
+    "GEMINI_RETRY_BASE_SLEEP_SECONDS": 2,
+    "GEMINI_RETRY_MAX_SLEEP_SECONDS": 60
+  },
+
+  "dataset": {
+    "file": "data/pr_features.csv",
+    "sha256": "a1180b568282f22d177de46ddda659eac6b5a4e0491fc36ad087b3235ceb6993",
+    "total_rows": 19174,
+    "merged_rows": 13148,
+    "unmerged_rows": 6026,
+    "repos_count": 35,
+    "bloque": "1 (partial)",
+    "pending_to_complete_bloque_1": {
+      "nodejs/node": 4650,
+      "scrapy/scrapy": 539
+    }
+  },
+
+  "prompts": {
+    "leakage_removed": true,
+    "removed": [
+      "Merged: yes/no from user message (process_block.py)",
+      "'merged PR diff' from MERGED_PR_SYSTEM_PROMPT",
+      "'merged PR' from card_patch rules in MERGED_PR_SYSTEM_PROMPT",
+      "'unmerged PRs' reference from MERGED_PR_SYSTEM_PROMPT"
+    ],
+    "ab_test_result": {
+      "n_prs": 50,
+      "worst_feature_agreement": "88% (risk_domains, likely_missing_cases)",
+      "conclusion": "leakage effect within model stochastic noise range, dataset usable"
+    }
+  },
+
+  "training_dataset": {
+    "file": "data/pr_datasets_filtered.csv",
+    "sha256": "c1234fd1687eaf39baf9e43a5d1b2bffd18752556e058a49f689092bd3920b70",
+    "rows_in_intersection": 18934,
+    "source_original": "pr_datasets.csv (475192 rows, 2.4 GB — filtered to matching pr_urls only, heavy text columns excluded)",
+    "columns_excluded": ["body", "title", "commit_message", "code_patch_diff", "login"]
+  },
+
+  "experiments": {
+    "notebook": "experiments/pr_feature_ablation.ipynb",
+    "framework": "XGBoost 3.3.0 + scikit-learn 1.9.0",
+    "split": "temporal, first 90% train / last 10% validation (no shuffle, no stratification)",
+    "random_state": 42,
+    "xgboost_params": {
+      "objective": "binary:logistic",
+      "n_estimators": 1000,
+      "learning_rate": 0.05,
+      "max_depth": 5,
+      "min_child_weight": 3,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "reg_lambda": 1.0,
+      "tree_method": "hist",
+      "early_stopping_rounds": 50
+    },
+    "reference_results": {
+      "note": "Resultados del run anterior (19137 filas en pr_features). El nuevo run puede diferir levemente por los 37 rows adicionales.",
+      "pr_dataset_only":  {"roc_auc": 0.8306, "ap_merged": null, "ap_not_merged": null, "best_iteration": 55},
+      "pr_features_only": {"roc_auc": 0.7781, "ap_merged": null, "ap_not_merged": null, "best_iteration": 503},
+      "combined":         {"roc_auc": 0.8777, "ap_merged": null, "ap_not_merged": 0.8407, "best_iteration": 63}
+    }
+  },
+
+  "pipeline": {
+    "entry_point": "scripts/run_block.py",
+    "parallel_launcher": "scripts/launch_parallel.py",
+    "card_update": "incremental per merged PR, saved after each LLM call",
+    "csv_write": "row-by-row immediately after each successful LLM call"
+  },
+
+  "repos_in_dataset": [
+    "angular/angular", "apache/echarts", "apple/swift", "atom/atom",
+    "bitcoin/bitcoin", "chartjs/Chart.js", "django/django",
+    "elastic/elasticsearch", "flutter/flutter", "godotengine/godot",
+    "h5bp/html5-boilerplate", "jquery/jquery", "kubernetes/kubernetes",
+    "laravel/laravel", "lodash/lodash", "moment/moment", "moby/moby",
+    "mrdoob/three.js", "mui-org/material-ui", "netdata/netdata",
+    "neovim/neovim", "nodejs/node", "pallets/flask", "puppeteer/puppeteer",
+    "pytorch/pytorch", "rails/rails", "redis/redis", "scrapy/scrapy",
+    "spring-projects/spring-boot", "spring-projects/spring-framework",
+    "storybookjs/storybook", "sveltejs/svelte", "tensorflow/models",
+    "tesseract-ocr/tesseract", "vercel/next.js"
+  ]
+}
