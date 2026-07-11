@@ -3,7 +3,7 @@ services:
     name: pr-merge-predictor-mcp
     env: python
     region: oregon
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python mcp_server/server.py --transport streamable-http
     envVars:
