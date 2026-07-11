@@ -1,0 +1,25 @@
+{
+  "default_model_id": "combined_temporal",
+  "models": [
+    {
+      "id": "combined_temporal",
+      "name": "Combined temporal",
+      "path": "xgb_final.pkl",
+      "description": "Production XGBoost pipeline trained on the combined dataset and evaluated with the temporal holdout.",
+      "metrics": {
+        "ap_not_merged": 0.8956,
+        "roc_auc": 0.939
+      }
+    },
+    {
+      "id": "combined_repo_split",
+      "name": "Combined repo split",
+      "path": "xgb_repo_split.pkl",
+      "description": "XGBoost pipeline trained with repository holdout evaluation for unseen-repo behavior.",
+      "metrics": {
+        "ap_not_merged": 0.7065,
+        "roc_auc": 0.856
+      }
+    }
+  ]
+}

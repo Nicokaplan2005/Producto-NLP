@@ -3,7 +3,10 @@ Carga el modelo final y produce predicciones + explicaciones SHAP.
 """
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import joblib
@@ -13,25 +16,140 @@ import shap
 from mcp_server.transforms import to_str_array  # noqa: F401 — necesario para deserializar el pickle
 
 ROOT       = Path(__file__).parent.parent
-MODEL_PATH = ROOT / "models" / "xgb_final.pkl"
+MODELS_DIR = ROOT / "models"
+REGISTRY_PATH = MODELS_DIR / "registry.json"
+DEFAULT_MODEL_ID = "combined_temporal"
 
 # Cache global para no recargar en cada llamada
-_PIPELINE: dict | None = None
-_EXPLAINER: shap.TreeExplainer | None = None
+_REGISTRY: dict[str, Any] | None = None
+_ACTIVE_MODEL_ID: str | None = None
+_PIPELINES: dict[str, dict] = {}
+_EXPLAINERS: dict[str, shap.TreeExplainer] = {}
+_MODEL_LOCK = RLock()
 
 
-def _load() -> dict:
-    global _PIPELINE
-    if _PIPELINE is None:
-        _PIPELINE = joblib.load(MODEL_PATH)
-    return _PIPELINE
+def _load_registry() -> dict[str, Any]:
+    global _REGISTRY
+    if _REGISTRY is None:
+        with REGISTRY_PATH.open("r", encoding="utf-8") as f:
+            _REGISTRY = json.load(f)
+    return _REGISTRY
 
 
-def _get_explainer(clf) -> shap.TreeExplainer:
-    global _EXPLAINER
-    if _EXPLAINER is None:
-        _EXPLAINER = shap.TreeExplainer(clf)
-    return _EXPLAINER
+def _registered_models() -> list[dict[str, Any]]:
+    return list(_load_registry().get("models", []))
+
+
+def _model_by_id(model_id: str) -> dict[str, Any] | None:
+    for model in _registered_models():
+        if model.get("id") == model_id:
+            return model
+    return None
+
+
+def _model_path(model: dict[str, Any]) -> Path:
+    path = Path(model["path"])
+    if not path.is_absolute():
+        path = MODELS_DIR / path
+    return path
+
+
+def _resolve_default_model_id() -> str:
+    env_model_id = os.getenv("ACTIVE_MODEL_ID") or os.getenv("MODEL_ID")
+    if env_model_id and _model_by_id(env_model_id):
+        return env_model_id
+    registry_default = _load_registry().get("default_model_id")
+    if registry_default and _model_by_id(registry_default):
+        return registry_default
+    return DEFAULT_MODEL_ID
+
+
+def get_active_model_id() -> str:
+    global _ACTIVE_MODEL_ID
+    with _MODEL_LOCK:
+        if _ACTIVE_MODEL_ID is None:
+            _ACTIVE_MODEL_ID = _resolve_default_model_id()
+        return _ACTIVE_MODEL_ID
+
+
+def _public_model_info(
+    model: dict[str, Any],
+    *,
+    active_model_id: str,
+    pipeline: dict | None = None,
+) -> dict[str, Any]:
+    path = _model_path(model)
+    metrics = model.get("metrics") or {}
+    if pipeline and pipeline.get("test_metrics"):
+        metrics = pipeline["test_metrics"]
+    feature_columns = pipeline.get("feature_columns", []) if pipeline else []
+    return {
+        "id": model["id"],
+        "name": model.get("name", model["id"]),
+        "description": model.get("description", ""),
+        "path": str(path.relative_to(ROOT)),
+        "available": path.exists(),
+        "active": model["id"] == active_model_id,
+        "metrics": metrics,
+        "feature_count": len(feature_columns) if feature_columns else None,
+    }
+
+
+def list_models() -> list[dict[str, Any]]:
+    active_model_id = get_active_model_id()
+    return [
+        _public_model_info(model, active_model_id=active_model_id)
+        for model in _registered_models()
+    ]
+
+
+def get_model_status() -> dict[str, Any]:
+    active_model_id = get_active_model_id()
+    pipeline = _load(active_model_id)
+    active_model = _model_by_id(active_model_id)
+    if active_model is None:
+        raise ValueError(f"Modelo no registrado: {active_model_id}")
+    return {
+        "active_model": _public_model_info(
+            active_model,
+            active_model_id=active_model_id,
+            pipeline=pipeline,
+        ),
+        "models": list_models(),
+    }
+
+
+def set_active_model(model_id: str) -> dict[str, Any]:
+    global _ACTIVE_MODEL_ID
+    model = _model_by_id(model_id)
+    if model is None:
+        raise ValueError(f"Modelo no registrado: {model_id}")
+    path = _model_path(model)
+    if not path.exists():
+        raise ValueError(f"Artefacto de modelo no encontrado: {path.name}")
+    with _MODEL_LOCK:
+        _load(model_id)
+        _ACTIVE_MODEL_ID = model_id
+    return get_model_status()
+
+
+def _load(model_id: str | None = None) -> dict:
+    resolved_model_id = model_id or get_active_model_id()
+    model = _model_by_id(resolved_model_id)
+    if model is None:
+        raise ValueError(f"Modelo no registrado: {resolved_model_id}")
+    path = _model_path(model)
+    with _MODEL_LOCK:
+        if resolved_model_id not in _PIPELINES:
+            _PIPELINES[resolved_model_id] = joblib.load(path)
+        return _PIPELINES[resolved_model_id]
+
+
+def _get_explainer(clf, model_id: str) -> shap.TreeExplainer:
+    with _MODEL_LOCK:
+        if model_id not in _EXPLAINERS:
+            _EXPLAINERS[model_id] = shap.TreeExplainer(clf)
+        return _EXPLAINERS[model_id]
 
 
 # ── Ensamblado de features ────────────────────────────────────────────────────
@@ -42,12 +160,13 @@ PIPE_COLS = ["semantic__risk_domains", "semantic__likely_missing_cases"]
 def assemble_features(
     base_features: dict[str, Any],
     semantic_features: dict[str, Any],
+    model_id: str | None = None,
 ) -> pd.DataFrame:
     """
     Combina base__ y semantic__ features en un DataFrame de una fila,
     con los mismos nombres de columna que espera el modelo.
     """
-    pipeline = _load()
+    pipeline = _load(model_id)
     expected_cols = pipeline["feature_columns"]
 
     row: dict[str, Any] = {}
@@ -79,16 +198,17 @@ def assemble_features(
 
 # ── Predicción ────────────────────────────────────────────────────────────────
 
-def predict(features_df: pd.DataFrame) -> dict[str, Any]:
+def predict(features_df: pd.DataFrame, model_id: str | None = None) -> dict[str, Any]:
     """
     Devuelve probabilidad de merge, label y confianza. Sin SHAP.
     Llamar explain() por separado solo si se necesita la explicación.
     """
-    pipeline   = _load()
+    resolved_model_id = model_id or get_active_model_id()
+    pipeline   = _load(resolved_model_id)
     pre        = pipeline["preprocessor"]
     clf        = pipeline["classifier"]
-    use_log    = pipeline["use_log"]
-    use_ratios = pipeline["use_ratios"]
+    use_log    = pipeline.get("use_log", False)
+    use_ratios = pipeline.get("use_ratios", False)
 
     X   = _apply_fe(features_df.copy(), use_log, use_ratios)
     X_t = pre.transform(X)
@@ -103,30 +223,34 @@ def predict(features_df: pd.DataFrame) -> dict[str, Any]:
         "low"
     )
 
+    model = _model_by_id(resolved_model_id) or {"id": resolved_model_id}
     return {
         "merge_probability":     round(prob_merged, 4),
         "not_merge_probability": round(prob_not_merged, 4),
         "label":                 label,
         "confidence":            confidence,
+        "model_id":              resolved_model_id,
+        "model_name":            model.get("name", resolved_model_id),
     }
 
 
-def explain(features_df: pd.DataFrame) -> list[dict]:
+def explain(features_df: pd.DataFrame, model_id: str | None = None) -> list[dict]:
     """
     Calcula SHAP para un DataFrame de una fila.
     Solo se llama on-demand (desde el dashboard o si el usuario lo pide).
     Devuelve lista de top_factors ordenada por impacto absoluto.
     """
-    pipeline   = _load()
+    resolved_model_id = model_id or get_active_model_id()
+    pipeline   = _load(resolved_model_id)
     pre        = pipeline["preprocessor"]
     clf        = pipeline["classifier"]
-    use_log    = pipeline["use_log"]
-    use_ratios = pipeline["use_ratios"]
+    use_log    = pipeline.get("use_log", False)
+    use_ratios = pipeline.get("use_ratios", False)
 
     X   = _apply_fe(features_df.copy(), use_log, use_ratios)
     X_t = pre.transform(X)
 
-    explainer   = _get_explainer(clf)
+    explainer   = _get_explainer(clf, resolved_model_id)
     shap_values = explainer.shap_values(X_t)
 
     feature_names = _get_transformed_names(pre, X)

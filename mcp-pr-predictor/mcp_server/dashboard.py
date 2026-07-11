@@ -119,6 +119,31 @@ tr.pr-row td { transition:background .1s; }
 <!-- ── MAIN ───────────────────────────────────────────────────────────── -->
 <main class="max-w-7xl mx-auto px-6 py-8 space-y-6">
 
+  <!-- MODEL SELECTOR -->
+  <section class="bg-white rounded-xl border border-slate-200 p-5">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div class="min-w-0">
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-widest">Modelo activo</p>
+        <h1 id="model-name" class="text-lg font-semibold text-slate-900 mt-1 truncate">Cargando modelo...</h1>
+        <p id="model-description" class="text-xs text-slate-500 mt-1 max-w-3xl truncate">-</p>
+      </div>
+      <div class="flex flex-col sm:flex-row sm:items-end gap-3">
+        <div>
+          <label for="model-selector" class="block text-[11px] font-medium text-slate-400 uppercase tracking-widest mb-1">
+            Modelo a servir
+          </label>
+          <select id="model-selector" onchange="changeModel(this.value)"
+            class="min-w-[320px] max-w-full text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-700
+                   focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200 bg-white">
+            <option value="">Cargando...</option>
+          </select>
+        </div>
+        <div id="model-metrics" class="flex flex-wrap gap-2 text-[11px] text-slate-500"></div>
+      </div>
+    </div>
+    <p id="model-switch-status" class="text-[11px] text-slate-400 mt-3 hidden"></p>
+  </section>
+
   <!-- KPI CARDS -->
   <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
 
@@ -278,11 +303,12 @@ tr.pr-row td { transition:background .1s; }
             <th class="text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-4 py-3 w-44">Score</th>
             <th class="text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Predicción</th>
             <th class="text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Confianza</th>
+            <th class="text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Modelo</th>
             <th class="text-center text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-4 py-3">Explicación</th>
           </tr>
         </thead>
         <tbody id="pr-table-body">
-          <tr><td colspan="7" class="py-16 text-center">
+          <tr><td colspan="8" class="py-16 text-center">
             <div class="flex flex-col items-center gap-2">
               <div class="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
               <p class="text-sm text-slate-400">Cargando predicciones...</p>
@@ -306,6 +332,7 @@ dayjs.extend(dayjs_plugin_relativeTime);
 dayjs.locale('es');
 
 let allData = [];
+let modelState = null;
 let tlChart = null, donutChart = null, histChart = null;
 
 /* ── Color helpers ──────────────────────────────── */
@@ -316,6 +343,89 @@ function scoreColor(p) {
 }
 
 /* ── Badge renderers ────────────────────────────── */
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function fmtMetric(value) {
+  return typeof value === 'number' ? value.toFixed(3) : 'n/a';
+}
+
+function modelOptionLabel(model) {
+  const metrics = model.metrics || {};
+  const availability = model.available ? '' : ' | no disponible';
+  return `${model.name} | AP ${fmtMetric(metrics.ap_not_merged)} | AUC ${fmtMetric(metrics.roc_auc)}${availability}`;
+}
+
+function renderModelState(state) {
+  modelState = state;
+  const active = state.active_model || {};
+  const selector = document.getElementById('model-selector');
+  const metrics = active.metrics || {};
+  selector.innerHTML = (state.models || []).map(model => `
+    <option value="${escapeHtml(model.id)}" ${model.available ? '' : 'disabled'}>
+      ${escapeHtml(modelOptionLabel(model))}
+    </option>
+  `).join('');
+  selector.value = active.id || '';
+  selector.disabled = false;
+  document.getElementById('model-name').textContent = active.name || 'Modelo no disponible';
+  document.getElementById('model-description').textContent = active.description || '-';
+  document.getElementById('model-metrics').innerHTML = `
+    <span class="inline-flex items-center rounded-full bg-indigo-50 text-indigo-700 px-2.5 py-1 font-medium">
+      AP not_merged ${fmtMetric(metrics.ap_not_merged)}
+    </span>
+    <span class="inline-flex items-center rounded-full bg-emerald-50 text-emerald-700 px-2.5 py-1 font-medium">
+      ROC-AUC ${fmtMetric(metrics.roc_auc)}
+    </span>
+    <span class="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2.5 py-1 font-medium">
+      ${active.feature_count || '-'} features
+    </span>`;
+}
+
+async function loadModels() {
+  try {
+    const res = await fetch('/api/models');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    renderModelState(await res.json());
+  } catch(e) {
+    document.getElementById('model-name').textContent = 'No se pudo cargar el modelo';
+    document.getElementById('model-description').textContent = String(e.message || e);
+  }
+}
+
+async function changeModel(modelId) {
+  if (!modelId || (modelState?.active_model?.id === modelId)) return;
+  const selector = document.getElementById('model-selector');
+  const status = document.getElementById('model-switch-status');
+  selector.disabled = true;
+  status.textContent = 'Cambiando modelo activo...';
+  status.classList.remove('hidden', 'text-red-500');
+  status.classList.add('text-slate-400');
+  try {
+    const res = await fetch('/api/models/active', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model_id: modelId}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo cambiar el modelo');
+    renderModelState(data);
+    status.textContent = 'Modelo activo actualizado. Las nuevas predicciones usan este modelo.';
+  } catch(e) {
+    status.textContent = 'Error: ' + (e.message || e);
+    status.classList.remove('text-slate-400');
+    status.classList.add('text-red-500');
+    selector.disabled = false;
+    if (modelState) renderModelState(modelState);
+  }
+}
+
 function labelBadge(l) {
   const ok = l === 'likely_merged';
   return `<span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${ok ? 'badge-merge' : 'badge-reject'}">
@@ -338,6 +448,11 @@ function shortRepo(repo) {
 }
 
 /* ── SHAP panel ─────────────────────────────────── */
+function modelBadge(pr) {
+  const name = pr.model_name || pr.model_id || 'legacy';
+  return `<span class="inline-flex max-w-[180px] truncate text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`;
+}
+
 const _shapCache = {};  // { id: top_factors[] }
 
 function renderShapBars(factors) {
@@ -366,7 +481,7 @@ function renderShapBars(factors) {
 
 function shapPlaceholderRow(id, hasFeatures) {
   return `<tr class="shap-row" id="shap-${id}">
-    <td colspan="7" class="bg-gradient-to-b from-slate-50 to-white px-10 py-4 border-b border-slate-100">
+    <td colspan="8" class="bg-gradient-to-b from-slate-50 to-white px-10 py-4 border-b border-slate-100">
       <div class="flex items-center gap-2 mb-3">
         <svg class="w-3.5 h-3.5 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -441,7 +556,7 @@ function renderTable(data) {
     data.length + ' resultado' + (data.length !== 1 ? 's' : '');
 
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="7" class="py-16 text-center">
+    tbody.innerHTML = `<tr><td colspan="8" class="py-16 text-center">
       <div class="flex flex-col items-center gap-2">
         <svg class="w-10 h-10 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
@@ -467,7 +582,7 @@ function renderTable(data) {
     // (shap_ready = 1 indica que ya existe en DB, se fetcheará al primer click)
 
     return `
-    <tr class="pr-row border-b border-slate-50" data-repo="${(pr.repo||'').toLowerCase()}" data-num="${num}" data-label="${pr.label||''}">
+    <tr class="pr-row border-b border-slate-50" data-repo="${(pr.repo||'').toLowerCase()}" data-num="${num}" data-label="${pr.label||''}" data-model="${(pr.model_name||pr.model_id||'').toLowerCase()}">
       <td class="px-6 py-3.5">${shortRepo(pr.repo)}</td>
       <td class="px-4 py-3.5">
         <a href="${pr.pr_url}" target="_blank"
@@ -486,6 +601,7 @@ function renderTable(data) {
       </td>
       <td class="px-4 py-3.5">${labelBadge(pr.label)}</td>
       <td class="px-4 py-3.5">${confBadge(pr.confidence)}</td>
+      <td class="px-4 py-3.5">${modelBadge(pr)}</td>
       <td class="px-4 py-3.5 text-center">
         ${hasFeat
           ? `<button id="btn-${id}" class="btn-shap" onclick="toggleShap(${id}, true)">Ver SHAP</button>`
@@ -505,7 +621,8 @@ function filterTable() {
     const repo = tr.dataset.repo || '';
     const num  = tr.dataset.num  || '';
     const lbl  = tr.dataset.label || '';
-    const matchQ = !q || repo.includes(q) || num.includes(q);
+    const model = tr.dataset.model || '';
+    const matchQ = !q || repo.includes(q) || num.includes(q) || model.includes(q);
     const matchL = !label || lbl === label;
     const show   = matchQ && matchL;
     tr.style.display = show ? '' : 'none';
@@ -703,6 +820,7 @@ async function loadData(showSpin) {
 }
 
 /* ── Auto-refresh cada 60s ──────────────────────── */
+loadModels();
 loadData(false);
 setInterval(() => loadData(false), 60000);
 </script>

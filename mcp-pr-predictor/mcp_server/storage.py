@@ -34,13 +34,21 @@ def init_db() -> None:
             not_merge_probability REAL,
             label                 TEXT,
             confidence            TEXT,
+            model_id              TEXT,
+            model_name            TEXT,
             features_snapshot     TEXT,
             shap_cache            TEXT,
             semantic_features     TEXT
         )
     """)
     # Migración segura: agrega columnas nuevas si ya existía la tabla sin ellas
-    for col_def in ("features_snapshot TEXT", "shap_cache TEXT", "semantic_features TEXT"):
+    for col_def in (
+        "features_snapshot TEXT",
+        "shap_cache TEXT",
+        "semantic_features TEXT",
+        "model_id TEXT",
+        "model_name TEXT",
+    ):
         try:
             conn.execute(f"ALTER TABLE pr_predictions ADD COLUMN {col_def}")
         except Exception:
@@ -77,8 +85,8 @@ def save_prediction(
         INSERT INTO pr_predictions
             (pr_url, repo, pr_number, processed_at,
              merge_probability, not_merge_probability, label, confidence,
-             features_snapshot, shap_cache, semantic_features)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+             model_id, model_name, features_snapshot, shap_cache, semantic_features)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
         """,
         (
             pr_url,
@@ -89,6 +97,8 @@ def save_prediction(
             result["not_merge_probability"],
             result["label"],
             result["confidence"],
+            result.get("model_id"),
+            result.get("model_name"),
             _to_json_safe(features_snapshot),
             json.dumps(semantic_dict, ensure_ascii=False),
         ),
@@ -112,6 +122,21 @@ def get_prediction_features(prediction_id: int) -> dict | None:
     if not row or not row[0]:
         return None
     return json.loads(row[0])
+
+
+def get_prediction_model_id(prediction_id: int) -> str | None:
+    """Devuelve el modelo usado por una predicciÃ³n, o None para filas legacy."""
+    if not DB_PATH.exists():
+        return None
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT model_id FROM pr_predictions WHERE id = ?",
+        (prediction_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return row[0]
 
 
 def get_cached_shap(prediction_id: int) -> list | None:
@@ -150,6 +175,7 @@ def get_predictions(limit: int = 500) -> list[dict]:
         """
         SELECT id, pr_url, repo, pr_number, processed_at,
                merge_probability, not_merge_probability, label, confidence,
+               model_id, model_name,
                CASE WHEN shap_cache IS NOT NULL THEN 1 ELSE 0 END AS shap_ready,
                CASE WHEN features_snapshot IS NOT NULL THEN 1 ELSE 0 END AS has_features
         FROM pr_predictions

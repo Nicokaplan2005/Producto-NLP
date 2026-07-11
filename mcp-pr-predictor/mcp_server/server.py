@@ -24,7 +24,14 @@ sys.path.insert(0, str(ROOT))
 
 from extract_pr_features import PRFeatureExtractor
 import pandas as pd
-from mcp_server.predictor import assemble_features, predict, explain
+from mcp_server.predictor import (
+    assemble_features,
+    explain,
+    get_active_model_id,
+    get_model_status,
+    predict,
+    set_active_model,
+)
 from mcp_server import storage
 from mcp_server.dashboard import generate_html
 from pipeline.schemas import EnhancedPRFeatures
@@ -230,8 +237,9 @@ def predict_pr_merge(
             if isinstance(semantic_dict.get(field), list):
                 semantic_dict[field] = "|".join(semantic_dict[field])
 
-        features_df = assemble_features(base_raw, semantic_dict)
-        result      = predict(features_df)
+        model_id = get_active_model_id()
+        features_df = assemble_features(base_raw, semantic_dict, model_id=model_id)
+        result      = predict(features_df, model_id=model_id)
     except Exception as e:
         return json.dumps({
             "error": "prediction_failed",
@@ -263,6 +271,8 @@ def predict_pr_merge(
         "merge_probability":     result["merge_probability"],
         "not_merge_probability": result["not_merge_probability"],
         "confidence":            result["confidence"],
+        "model_id":              result["model_id"],
+        "model_name":            result["model_name"],
         "summary": (
             f"El modelo predice {label_es} con {pct}% de probabilidad de merge "
             f"(confianza: {result['confidence']})."
@@ -286,6 +296,28 @@ async def api_predictions(request: Request) -> JSONResponse:
     return JSONResponse(data)
 
 
+@mcp.custom_route("/api/models", methods=["GET"])
+async def api_models(request: Request) -> JSONResponse:
+    return JSONResponse(get_model_status())
+
+
+@mcp.custom_route("/api/models/active", methods=["POST"])
+async def api_set_active_model(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+
+    model_id = str(payload.get("model_id", "")).strip()
+    if not model_id:
+        return JSONResponse({"error": "model_id_required"}, status_code=400)
+
+    try:
+        return JSONResponse(set_active_model(model_id))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
 @mcp.custom_route("/api/shap/{id}", methods=["GET"])
 async def api_shap(request: Request) -> JSONResponse:
     try:
@@ -305,7 +337,7 @@ async def api_shap(request: Request) -> JSONResponse:
 
     try:
         features_df  = pd.DataFrame([feat_dict])
-        top_factors  = explain(features_df)
+        top_factors  = explain(features_df, model_id=storage.get_prediction_model_id(pred_id))
         storage.save_shap_cache(pred_id, top_factors)
         return JSONResponse({"top_factors": top_factors, "cached": False})
     except Exception as e:
