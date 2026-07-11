@@ -1,0 +1,12 @@
+mcp>=1.28.0
+xgboost>=2.0
+scikit-learn>=1.4
+pandas>=2.0
+numpy>=1.26
+shap>=0.45
+joblib>=1.3
+starlette
+uvicorn[standard]
+requests>=2.31
+pydantic>=2.7
+certifi

@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: pr-merge-predictor-mcp
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python mcp_server/server.py --transport streamable-http
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false          # setear manualmente en el Render dashboard
+      - key: PREDICTIONS_DB_PATH
+        value: /tmp/predictions.db
