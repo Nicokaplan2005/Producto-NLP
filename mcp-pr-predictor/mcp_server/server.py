@@ -34,6 +34,7 @@ from mcp_server.predictor import (
 )
 from mcp_server import storage
 from mcp_server.dashboard import generate_html
+from mcp_server.runtime_settings import automatic_decision, get_settings, update_settings
 from pipeline.schemas import EnhancedPRFeatures
 
 # Inicializar DB al arrancar el server
@@ -163,6 +164,30 @@ _port = int(os.getenv("PORT", "8000"))
 mcp = FastMCP("PR Merge Predictor", instructions=INSTRUCTIONS, host="0.0.0.0", port=_port)
 
 
+def _build_negative_prompt(
+    pr_url: str,
+    result: dict[str, Any],
+    threshold: float,
+    top_factors: list[dict],
+) -> str:
+    factors_text = "\n".join(
+        f"- {f['feature']}: impacto {f['impact']} ({f['direction']})"
+        for f in top_factors
+    )
+    return (
+        "El MCP PR Merge Predictor decidio NO MERGE para esta PR.\n\n"
+        f"PR: {pr_url}\n"
+        f"Modelo: {result.get('model_name')} ({result.get('model_id')})\n"
+        f"Probabilidad de merge: {result['merge_probability']:.3f}\n"
+        f"Threshold automatico: {threshold:.3f}\n\n"
+        "Factores SHAP principales:\n"
+        f"{factors_text}\n\n"
+        "Explicale al usuario por que el resultado es negativo y que cambios concretos "
+        "podrian mejorar la PR. No repitas solo los numeros: conectalos con riesgos "
+        "accionables, tests faltantes, alcance del cambio y posibles mejoras."
+    )
+
+
 # ── Tool principal ────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -240,6 +265,26 @@ def predict_pr_merge(
         model_id = get_active_model_id()
         features_df = assemble_features(base_raw, semantic_dict, model_id=model_id)
         result      = predict(features_df, model_id=model_id)
+        decision_settings = get_settings()
+        result["decision_mode"] = decision_settings["mode"]
+        result["decision_threshold"] = decision_settings["threshold"]
+        if decision_settings["mode"] == "automatic":
+            decision = automatic_decision(
+                result["merge_probability"],
+                decision_settings["threshold"],
+            )
+            result["auto_decision"] = decision
+            if decision == "no_merge":
+                top_factors = explain(features_df, model_id=model_id)
+                result["top_factors"] = top_factors
+                result["negative_explanation_prompt"] = _build_negative_prompt(
+                    pr_url,
+                    result,
+                    decision_settings["threshold"],
+                    top_factors,
+                )
+        else:
+            result["auto_decision"] = None
     except Exception as e:
         return json.dumps({
             "error": "prediction_failed",
@@ -273,12 +318,18 @@ def predict_pr_merge(
         "confidence":            result["confidence"],
         "model_id":              result["model_id"],
         "model_name":            result["model_name"],
+        "decision_mode":         result["decision_mode"],
+        "decision_threshold":    result["decision_threshold"],
+        "auto_decision":         result.get("auto_decision"),
         "summary": (
             f"El modelo predice {label_es} con {pct}% de probabilidad de merge "
             f"(confianza: {result['confidence']})."
         ),
         "note": "El desglose SHAP está disponible en el dashboard: http://localhost:8000/dashboard",
     }
+
+    if result.get("negative_explanation_prompt"):
+        response["negative_explanation_prompt"] = result["negative_explanation_prompt"]
 
     return json.dumps(response, ensure_ascii=False, indent=2)
 
@@ -316,6 +367,25 @@ async def api_set_active_model(request: Request) -> JSONResponse:
         return JSONResponse(set_active_model(model_id))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@mcp.custom_route("/api/settings", methods=["GET"])
+async def api_settings(request: Request) -> JSONResponse:
+    return JSONResponse(get_settings())
+
+
+@mcp.custom_route("/api/settings", methods=["POST"])
+async def api_update_settings(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+        threshold = payload.get("threshold")
+        if threshold is not None:
+            threshold = float(threshold)
+        return JSONResponse(update_settings(payload.get("mode"), threshold))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception:
+        return JSONResponse({"error": "invalid_settings"}, status_code=400)
 
 
 @mcp.custom_route("/api/shap/{id}", methods=["GET"])

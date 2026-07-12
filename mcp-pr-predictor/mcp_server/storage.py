@@ -36,6 +36,10 @@ def init_db() -> None:
             confidence            TEXT,
             model_id              TEXT,
             model_name            TEXT,
+            decision_mode         TEXT,
+            decision_threshold    REAL,
+            auto_decision         TEXT,
+            negative_explanation_prompt TEXT,
             features_snapshot     TEXT,
             shap_cache            TEXT,
             semantic_features     TEXT
@@ -48,6 +52,10 @@ def init_db() -> None:
         "semantic_features TEXT",
         "model_id TEXT",
         "model_name TEXT",
+        "decision_mode TEXT",
+        "decision_threshold REAL",
+        "auto_decision TEXT",
+        "negative_explanation_prompt TEXT",
     ):
         try:
             conn.execute(f"ALTER TABLE pr_predictions ADD COLUMN {col_def}")
@@ -85,8 +93,9 @@ def save_prediction(
         INSERT INTO pr_predictions
             (pr_url, repo, pr_number, processed_at,
              merge_probability, not_merge_probability, label, confidence,
-             model_id, model_name, features_snapshot, shap_cache, semantic_features)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+             model_id, model_name, decision_mode, decision_threshold, auto_decision,
+             negative_explanation_prompt, features_snapshot, shap_cache, semantic_features)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             pr_url,
@@ -99,7 +108,12 @@ def save_prediction(
             result["confidence"],
             result.get("model_id"),
             result.get("model_name"),
+            result.get("decision_mode"),
+            result.get("decision_threshold"),
+            result.get("auto_decision"),
+            result.get("negative_explanation_prompt"),
             _to_json_safe(features_snapshot),
+            json.dumps(result.get("top_factors"), ensure_ascii=False) if result.get("top_factors") else None,
             json.dumps(semantic_dict, ensure_ascii=False),
         ),
     )
@@ -175,7 +189,8 @@ def get_predictions(limit: int = 500) -> list[dict]:
         """
         SELECT id, pr_url, repo, pr_number, processed_at,
                merge_probability, not_merge_probability, label, confidence,
-               model_id, model_name,
+               model_id, model_name, decision_mode, decision_threshold, auto_decision,
+               negative_explanation_prompt,
                CASE WHEN shap_cache IS NOT NULL THEN 1 ELSE 0 END AS shap_ready,
                CASE WHEN features_snapshot IS NOT NULL THEN 1 ELSE 0 END AS has_features
         FROM pr_predictions

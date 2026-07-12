@@ -142,10 +142,37 @@ tr.pr-row td { transition:background .1s; }
       </div>
     </div>
     <p id="model-switch-status" class="text-[11px] text-slate-400 mt-3 hidden"></p>
+    <div class="mt-4 pt-4 border-t border-slate-100 flex flex-col lg:flex-row lg:items-end gap-4">
+      <div>
+        <p class="text-[11px] font-medium text-slate-400 uppercase tracking-widest mb-2">Modo de decision</p>
+        <div class="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+          <button id="mode-manual" onclick="setDecisionMode('manual')"
+            class="px-3 py-1.5 rounded-md text-xs font-semibold text-slate-600">No automatico</button>
+          <button id="mode-automatic" onclick="setDecisionMode('automatic')"
+            class="px-3 py-1.5 rounded-md text-xs font-semibold text-slate-600">Automatico</button>
+        </div>
+      </div>
+      <div id="threshold-box" class="hidden">
+        <label for="threshold-input" class="block text-[11px] font-medium text-slate-400 uppercase tracking-widest mb-1">
+          Threshold automatico
+        </label>
+        <div class="flex items-center gap-2">
+          <input id="threshold-input" type="number" min="0" max="1" step="0.01"
+            class="w-28 text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-700
+                   focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200 bg-white">
+          <button onclick="saveThreshold()"
+            class="text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-2 rounded-lg">
+            Guardar
+          </button>
+          <span id="threshold-suggested" class="text-[11px] text-slate-400"></span>
+        </div>
+      </div>
+      <p id="settings-status" class="text-[11px] text-slate-400"></p>
+    </div>
   </section>
 
   <!-- KPI CARDS -->
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
     <div class="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow">
       <div class="flex items-start justify-between">
@@ -164,7 +191,7 @@ tr.pr-row td { transition:background .1s; }
       <p class="text-[11px] text-slate-400 mt-2">analizadas en total</p>
     </div>
 
-    <div class="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow">
+    <div class="hidden bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow">
       <div class="flex items-start justify-between">
         <div>
           <p class="text-[11px] font-medium text-slate-400 uppercase tracking-widest">Score Prom.</p>
@@ -196,7 +223,7 @@ tr.pr-row td { transition:background .1s; }
       <p class="text-[11px] text-slate-400 mt-2">predicciones positivas</p>
     </div>
 
-    <div class="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow">
+    <div class="hidden bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow">
       <div class="flex items-start justify-between">
         <div>
           <p class="text-[11px] font-medium text-slate-400 uppercase tracking-widest">Última PR</p>
@@ -217,7 +244,7 @@ tr.pr-row td { transition:background .1s; }
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
     <!-- Timeline -->
-    <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-6">
+    <div class="hidden lg:col-span-2 bg-white rounded-xl border border-slate-200 p-6">
       <div class="flex items-start justify-between mb-5">
         <div>
           <h2 class="text-sm font-semibold text-slate-800">Score por PR</h2>
@@ -248,7 +275,7 @@ tr.pr-row td { transition:background .1s; }
 
   <!-- CONFIDENCE DISTRIBUTION (mini bar chart) -->
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-    <div class="bg-white rounded-xl border border-slate-200 p-6">
+    <div class="hidden bg-white rounded-xl border border-slate-200 p-6">
       <h2 class="text-sm font-semibold text-slate-800 mb-4">Distribución de Confianza</h2>
       <div id="conf-bars" class="space-y-3"></div>
     </div>
@@ -333,6 +360,7 @@ dayjs.locale('es');
 
 let allData = [];
 let modelState = null;
+let settingsState = null;
 let tlChart = null, donutChart = null, histChart = null;
 
 /* ── Color helpers ──────────────────────────────── */
@@ -426,6 +454,63 @@ async function changeModel(modelId) {
   }
 }
 
+function renderSettings(state) {
+  settingsState = state;
+  const manual = document.getElementById('mode-manual');
+  const automatic = document.getElementById('mode-automatic');
+  const autoOn = state.mode === 'automatic';
+  manual.className = autoOn
+    ? 'px-3 py-1.5 rounded-md text-xs font-semibold text-slate-600'
+    : 'px-3 py-1.5 rounded-md text-xs font-semibold bg-white text-indigo-700 shadow-sm';
+  automatic.className = autoOn
+    ? 'px-3 py-1.5 rounded-md text-xs font-semibold bg-white text-indigo-700 shadow-sm'
+    : 'px-3 py-1.5 rounded-md text-xs font-semibold text-slate-600';
+  document.getElementById('threshold-box').classList.toggle('hidden', !autoOn);
+  document.getElementById('threshold-input').value = Number(state.threshold || 0.5).toFixed(2);
+  document.getElementById('threshold-suggested').textContent =
+    `sugerido ${Number(state.suggested_threshold || 0.5).toFixed(2)}`;
+}
+
+async function loadSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    renderSettings(await res.json());
+  } catch(e) {
+    document.getElementById('settings-status').textContent = 'No se pudo cargar settings';
+  }
+}
+
+async function saveSettings(payload) {
+  const status = document.getElementById('settings-status');
+  status.textContent = 'Guardando...';
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'No se pudo guardar');
+    renderSettings(data);
+    status.textContent = data.mode === 'automatic'
+      ? 'Automatico activo para nuevas predicciones.'
+      : 'Modo no automatico activo.';
+  } catch(e) {
+    status.textContent = 'Error: ' + (e.message || e);
+  }
+}
+
+function setDecisionMode(mode) {
+  const threshold = settingsState?.threshold ?? 0.5;
+  saveSettings({mode, threshold});
+}
+
+function saveThreshold() {
+  const threshold = Number(document.getElementById('threshold-input').value);
+  saveSettings({mode: settingsState?.mode || 'automatic', threshold});
+}
+
 function labelBadge(l) {
   const ok = l === 'likely_merged';
   return `<span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${ok ? 'badge-merge' : 'badge-reject'}">
@@ -438,6 +523,12 @@ function confBadge(c) {
   const map   = {high:'badge-high', medium:'badge-medium', low:'badge-low'};
   const label = {high:'Alta', medium:'Media', low:'Baja'};
   return `<span class="text-[11px] font-medium px-2 py-0.5 rounded-full ${map[c]||'badge-low'}">${label[c]||c}</span>`;
+}
+
+function decisionBadge(pr) {
+  if (!pr.auto_decision) return '';
+  const ok = pr.auto_decision === 'merge';
+  return `<span class="ml-1 inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${ok ? 'badge-merge' : 'badge-reject'}">auto: ${ok ? 'merge' : 'no merge'}</span>`;
 }
 
 function shortRepo(repo) {
@@ -479,7 +570,7 @@ function renderShapBars(factors) {
   }).join('');
 }
 
-function shapPlaceholderRow(id, hasFeatures) {
+function shapPlaceholderRow(id, hasFeatures, prompt) {
   return `<tr class="shap-row" id="shap-${id}">
     <td colspan="8" class="bg-gradient-to-b from-slate-50 to-white px-10 py-4 border-b border-slate-100">
       <div class="flex items-center gap-2 mb-3">
@@ -503,6 +594,10 @@ function shapPlaceholderRow(id, hasFeatures) {
              </div>`
           : `<p class="text-xs text-slate-400 py-2">Features no disponibles para esta predicción.</p>`}
       </div>
+      ${prompt ? `<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <p class="text-[11px] font-semibold text-amber-700 uppercase tracking-wider mb-2">Prompt para explicar no merge</p>
+        <pre class="whitespace-pre-wrap text-xs text-slate-700 leading-relaxed">${escapeHtml(prompt)}</pre>
+      </div>` : ''}
     </td>
   </tr>`;
 }
@@ -599,7 +694,7 @@ function renderTable(data) {
           <span class="text-xs font-bold tabular-nums w-8 text-right" style="color:${col}">${pct}%</span>
         </div>
       </td>
-      <td class="px-4 py-3.5">${labelBadge(pr.label)}</td>
+      <td class="px-4 py-3.5">${labelBadge(pr.label)}${decisionBadge(pr)}</td>
       <td class="px-4 py-3.5">${confBadge(pr.confidence)}</td>
       <td class="px-4 py-3.5">${modelBadge(pr)}</td>
       <td class="px-4 py-3.5 text-center">
@@ -608,7 +703,7 @@ function renderTable(data) {
           : '<span class="text-slate-200 text-xs">—</span>'}
       </td>
     </tr>
-    ${hasFeat ? shapPlaceholderRow(id, true) : ''}`;
+    ${hasFeat ? shapPlaceholderRow(id, true, pr.negative_explanation_prompt) : ''}`;
   }).join('');
 }
 
@@ -821,6 +916,7 @@ async function loadData(showSpin) {
 
 /* ── Auto-refresh cada 60s ──────────────────────── */
 loadModels();
+loadSettings();
 loadData(false);
 setInterval(() => loadData(false), 60000);
 </script>
