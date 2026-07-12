@@ -70,6 +70,12 @@ Llamá `predict_pr_merge` con:
 El server valida tu JSON contra el schema. Si hay errores, corrígelos y
 volvé a llamar. Los errores indican exactamente qué campo falló y por qué.
 
+## Modo automatico y explicaciones negativas
+Si `predict_pr_merge` devuelve `auto_decision: "no_merge"` junto con
+`negative_explanation_prompt` y `prediction_id`, usa ese prompt para redactar
+una explicacion clara para el usuario. Despues llama el tool
+`save_negative_explanation` con ese `prediction_id` y tu explicacion final.
+
 ---
 
 ## Definición de las 26 features semánticas
@@ -293,9 +299,10 @@ def predict_pr_merge(
         }, ensure_ascii=False)
 
     # ── 3b. Persistir en el dashboard (sin SHAP — se calcula on-demand) ──────────
+    prediction_id = None
     try:
         features_snapshot = features_df.iloc[0].to_dict()
-        storage.save_prediction(
+        prediction_id = storage.save_prediction(
             pr_url=pr_url,
             repo=f"{owner}/{repo_name}",
             pr_number=str(pr_number),
@@ -312,6 +319,7 @@ def predict_pr_merge(
 
     response = {
         "pr_url":                pr_url,
+        "prediction_id":         prediction_id,
         "label":                 label_es,
         "merge_probability":     result["merge_probability"],
         "not_merge_probability": result["not_merge_probability"],
@@ -335,6 +343,25 @@ def predict_pr_merge(
 
 
 # ── Dashboard routes ──────────────────────────────────────────────────────────
+
+@mcp.tool()
+def save_negative_explanation(prediction_id: int, explanation: str) -> str:
+    """
+    Guarda en el dashboard la explicacion final que Claude redacto para una
+    prediccion automatica negativa.
+    """
+    ok = storage.save_negative_explanation(prediction_id, explanation.strip())
+    if not ok:
+        return json.dumps({
+            "error": "prediction_not_found",
+            "message": "No encontre una prediccion con ese prediction_id.",
+        }, ensure_ascii=False)
+    return json.dumps({
+        "ok": True,
+        "prediction_id": prediction_id,
+        "message": "Explicacion guardada en el dashboard.",
+    }, ensure_ascii=False)
+
 
 @mcp.custom_route("/dashboard", methods=["GET"])
 async def dashboard_handler(request: Request) -> HTMLResponse:

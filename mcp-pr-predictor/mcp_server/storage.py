@@ -40,6 +40,7 @@ def init_db() -> None:
             decision_threshold    REAL,
             auto_decision         TEXT,
             negative_explanation_prompt TEXT,
+            negative_explanation TEXT,
             features_snapshot     TEXT,
             shap_cache            TEXT,
             semantic_features     TEXT
@@ -56,6 +57,7 @@ def init_db() -> None:
         "decision_threshold REAL",
         "auto_decision TEXT",
         "negative_explanation_prompt TEXT",
+        "negative_explanation TEXT",
     ):
         try:
             conn.execute(f"ALTER TABLE pr_predictions ADD COLUMN {col_def}")
@@ -179,6 +181,21 @@ def save_shap_cache(prediction_id: int, top_factors: list) -> None:
     conn.close()
 
 
+def save_negative_explanation(prediction_id: int, explanation: str) -> bool:
+    """Guarda la explicacion final generada por Claude para una prediccion negativa."""
+    if not DB_PATH.exists():
+        return False
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.execute(
+        "UPDATE pr_predictions SET negative_explanation = ? WHERE id = ?",
+        (explanation, prediction_id),
+    )
+    conn.commit()
+    updated = cur.rowcount > 0
+    conn.close()
+    return updated
+
+
 def get_predictions(limit: int = 500) -> list[dict]:
     """Devuelve las predicciones ordenadas por fecha (más recientes primero)."""
     if not DB_PATH.exists():
@@ -190,7 +207,7 @@ def get_predictions(limit: int = 500) -> list[dict]:
         SELECT id, pr_url, repo, pr_number, processed_at,
                merge_probability, not_merge_probability, label, confidence,
                model_id, model_name, decision_mode, decision_threshold, auto_decision,
-               negative_explanation_prompt,
+               negative_explanation,
                CASE WHEN shap_cache IS NOT NULL THEN 1 ELSE 0 END AS shap_ready,
                CASE WHEN features_snapshot IS NOT NULL THEN 1 ELSE 0 END AS has_features
         FROM pr_predictions

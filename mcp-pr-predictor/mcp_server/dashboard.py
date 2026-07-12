@@ -570,7 +570,7 @@ function renderShapBars(factors) {
   }).join('');
 }
 
-function shapPlaceholderRow(id, hasFeatures, prompt) {
+function shapPlaceholderRow(id, hasFeatures, explanation, needsExplanation) {
   return `<tr class="shap-row" id="shap-${id}">
     <td colspan="8" class="bg-gradient-to-b from-slate-50 to-white px-10 py-4 border-b border-slate-100">
       <div class="flex items-center gap-2 mb-3">
@@ -594,9 +594,12 @@ function shapPlaceholderRow(id, hasFeatures, prompt) {
              </div>`
           : `<p class="text-xs text-slate-400 py-2">Features no disponibles para esta predicción.</p>`}
       </div>
-      ${prompt ? `<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
-        <p class="text-[11px] font-semibold text-amber-700 uppercase tracking-wider mb-2">Prompt para explicar no merge</p>
-        <pre class="whitespace-pre-wrap text-xs text-slate-700 leading-relaxed">${escapeHtml(prompt)}</pre>
+      ${explanation ? `<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <p class="text-[11px] font-semibold text-amber-700 uppercase tracking-wider mb-2">Explicacion de Claude</p>
+        <p class="whitespace-pre-wrap text-xs text-slate-700 leading-relaxed">${escapeHtml(explanation)}</p>
+      </div>` : ''}
+      ${!explanation && needsExplanation ? `<div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p class="text-xs text-slate-500">Explicacion de Claude pendiente.</p>
       </div>` : ''}
     </td>
   </tr>`;
@@ -703,7 +706,12 @@ function renderTable(data) {
           : '<span class="text-slate-200 text-xs">—</span>'}
       </td>
     </tr>
-    ${hasFeat ? shapPlaceholderRow(id, true, pr.negative_explanation_prompt) : ''}`;
+    ${hasFeat ? shapPlaceholderRow(
+      id,
+      true,
+      pr.negative_explanation,
+      pr.auto_decision === 'no_merge'
+    ) : ''}`;
   }).join('');
 }
 
