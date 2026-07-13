@@ -172,7 +172,7 @@ tr.pr-row td { transition:background .1s; }
   </section>
 
   <!-- KPI CARDS -->
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
 
     <div class="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow">
       <div class="flex items-start justify-between">
@@ -238,10 +238,28 @@ tr.pr-row td { transition:background .1s; }
       </div>
       <p id="kpi-last-sub" class="text-[11px] text-slate-400 mt-2 truncate">—</p>
     </div>
+    <div class="bg-white rounded-xl border border-slate-200 p-5 flex flex-col">
+      <div class="mb-3">
+        <h2 class="text-sm font-semibold text-slate-800">DistribuciÃ³n</h2>
+        <p class="text-[11px] text-slate-400 mt-0.5">Merge vs Rechazo predicho</p>
+      </div>
+      <div class="flex-1 flex items-center justify-center min-h-[150px]">
+        <canvas id="chart-donut"></canvas>
+      </div>
+      <div id="donut-legend" class="flex justify-center gap-4 mt-3"></div>
+    </div>
+
+    <div class="bg-white rounded-xl border border-slate-200 p-5">
+      <h2 class="text-sm font-semibold text-slate-800 mb-1">Histograma de Scores</h2>
+      <p class="text-[11px] text-slate-400 mb-3">Frecuencia de probabilidades de merge</p>
+      <div class="h-[150px]">
+        <canvas id="chart-histogram"></canvas>
+      </div>
+    </div>
   </div>
 
   <!-- CHARTS ROW -->
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+  <div hidden class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
     <!-- Timeline -->
     <div class="hidden lg:col-span-2 bg-white rounded-xl border border-slate-200 p-6">
@@ -261,31 +279,31 @@ tr.pr-row td { transition:background .1s; }
     </div>
 
     <!-- Donut -->
-    <div class="bg-white rounded-xl border border-slate-200 p-6 flex flex-col">
+    <div class="hidden bg-white rounded-xl border border-slate-200 p-6 flex flex-col">
       <div class="mb-4">
         <h2 class="text-sm font-semibold text-slate-800">Distribución</h2>
         <p class="text-[11px] text-slate-400 mt-0.5">Merge vs Rechazo predicho</p>
       </div>
       <div class="flex-1 flex items-center justify-center" style="min-height:150px">
-        <canvas id="chart-donut"></canvas>
+        <canvas id="chart-donut-old"></canvas>
       </div>
-      <div id="donut-legend" class="flex justify-center gap-5 mt-4"></div>
+      <div id="donut-legend-old" class="flex justify-center gap-5 mt-4"></div>
     </div>
   </div>
 
   <!-- CONFIDENCE DISTRIBUTION (mini bar chart) -->
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+  <div hidden class="grid grid-cols-1 lg:grid-cols-3 gap-4">
     <div class="hidden bg-white rounded-xl border border-slate-200 p-6">
       <h2 class="text-sm font-semibold text-slate-800 mb-4">Distribución de Confianza</h2>
       <div id="conf-bars" class="space-y-3"></div>
     </div>
 
     <!-- Score histogram -->
-    <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-6">
+    <div class="hidden lg:col-span-2 bg-white rounded-xl border border-slate-200 p-6">
       <h2 class="text-sm font-semibold text-slate-800 mb-1">Histograma de Scores</h2>
       <p class="text-[11px] text-slate-400 mb-4">Frecuencia de probabilidades de merge</p>
       <div style="height:140px">
-        <canvas id="chart-histogram"></canvas>
+        <canvas id="chart-histogram-old"></canvas>
       </div>
     </div>
   </div>
@@ -347,7 +365,17 @@ tr.pr-row td { transition:background .1s; }
 
     <div class="px-6 py-3 border-t border-slate-100 flex items-center justify-between">
       <p id="table-footer" class="text-[11px] text-slate-400">— resultados</p>
-      <p class="text-[11px] text-slate-300">Máx. 500 registros</p>
+      <div class="flex items-center gap-2">
+        <button id="page-prev" onclick="changePage(-1)"
+          class="text-[11px] font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-md disabled:opacity-40 disabled:cursor-not-allowed">
+          Anterior
+        </button>
+        <span id="page-info" class="text-[11px] text-slate-400">Página 1</span>
+        <button id="page-next" onclick="changePage(1)"
+          class="text-[11px] font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-md disabled:opacity-40 disabled:cursor-not-allowed">
+          Siguiente
+        </button>
+      </div>
     </div>
   </div>
 
@@ -361,6 +389,9 @@ dayjs.locale('es');
 let allData = [];
 let modelState = null;
 let settingsState = null;
+let tableData = [];
+let currentPage = 1;
+const PAGE_SIZE = 100;
 let tlChart = null, donutChart = null, histChart = null;
 
 /* ── Color helpers ──────────────────────────────── */
@@ -649,11 +680,29 @@ async function toggleShap(id, hasFeatures) {
 
 /* ── Table render ───────────────────────────────── */
 function renderTable(data) {
-  const tbody = document.getElementById('pr-table-body');
-  document.getElementById('table-footer').textContent =
-    data.length + ' resultado' + (data.length !== 1 ? 's' : '');
+  tableData = data;
+  currentPage = 1;
+  renderTablePage();
+}
 
-  if (!data.length) {
+function renderTablePage() {
+  const tbody = document.getElementById('pr-table-body');
+  const total = tableData.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  currentPage = Math.min(Math.max(currentPage, 1), totalPages);
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const end = Math.min(start + PAGE_SIZE, total);
+  const data = tableData.slice(start, end);
+
+  document.getElementById('table-footer').textContent =
+    total
+      ? `${start + 1}-${end} de ${total} resultado${total !== 1 ? 's' : ''}`
+      : '0 resultados';
+  document.getElementById('page-info').textContent = `Página ${currentPage} de ${totalPages}`;
+  document.getElementById('page-prev').disabled = currentPage <= 1;
+  document.getElementById('page-next').disabled = currentPage >= totalPages;
+
+  if (!total) {
     tbody.innerHTML = `<tr><td colspan="8" class="py-16 text-center">
       <div class="flex flex-col items-center gap-2">
         <svg class="w-10 h-10 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -715,25 +764,24 @@ function renderTable(data) {
   }).join('');
 }
 
+function changePage(delta) {
+  currentPage += delta;
+  renderTablePage();
+}
+
 function filterTable() {
   const q     = (document.getElementById('search-input').value || '').toLowerCase().trim();
   const label = document.getElementById('filter-label').value;
-  const rows  = document.querySelectorAll('#pr-table-body tr.pr-row');
-  let shown   = 0;
-  rows.forEach(tr => {
-    const repo = tr.dataset.repo || '';
-    const num  = tr.dataset.num  || '';
-    const lbl  = tr.dataset.label || '';
-    const model = tr.dataset.model || '';
+  const filtered = allData.filter(pr => {
+    const repo = (pr.repo || '').toLowerCase();
+    const num = String(pr.pr_number || '');
+    const lbl = pr.label || '';
+    const model = (pr.model_name || pr.model_id || '').toLowerCase();
     const matchQ = !q || repo.includes(q) || num.includes(q) || model.includes(q);
     const matchL = !label || lbl === label;
-    const show   = matchQ && matchL;
-    tr.style.display = show ? '' : 'none';
-    const shapTr = document.getElementById('shap-' + tr.querySelector('[id^=btn-]')?.id.replace('btn-',''));
-    if (shapTr && !show) shapTr.classList.remove('open');
-    if (show) shown++;
+    return matchQ && matchL;
   });
-  document.getElementById('table-footer').textContent = shown + ' resultado' + (shown !== 1 ? 's' : '');
+  renderTable(filtered);
 }
 
 /* ── KPI render ─────────────────────────────────── */
@@ -833,7 +881,7 @@ function renderDonut(data) {
   if (donutChart) donutChart.destroy();
   const ctx = document.getElementById('chart-donut').getContext('2d');
   donutChart = new Chart(ctx, {
-    type: 'doughnut',
+    type: 'pie',
     data: {
       datasets: [{
         data: [mergeN, rejectN],
@@ -843,7 +891,7 @@ function renderDonut(data) {
       }]
     },
     options: {
-      responsive:true, maintainAspectRatio:false, cutout:'72%',
+      responsive:true, maintainAspectRatio:false,
       plugins: {
         legend: {display:false},
         tooltip: {
@@ -908,10 +956,8 @@ async function loadData(showSpin) {
     const data = await res.json();
     allData = data;
     renderKpis(data);
-    renderTimeline(data);
     renderDonut(data);
     renderHistogram(data);
-    renderConfBars(data);
     renderTable(data);
     const now = dayjs().format('HH:mm:ss');
     const el  = document.getElementById('last-updated');
